@@ -959,6 +959,115 @@ jobs:
 
 # ------------------------------------------------------
 
+  Build-Android8:
+    runs-on: ubuntu-latest
+
+    env:
+      ANDROID_PLATFORM: android-26
+      NDK_VERSION: 26.1.10909125
+      QT_VERSION: 6.7.3
+      QT_MODULES: 'qtremoteobjects qt5compat qtimageformats qtshadertools'
+      APP_ANDROID_MIN_SDK: 26
+      APP_ANDROID_MAX_SDK: 27
+      PROD_AGW_PUBLIC_KEY: ${{ secrets.PROD_AGW_PUBLIC_KEY }}
+      PROD_S3_ENDPOINT: ${{ secrets.PROD_S3_ENDPOINT }}
+      FALLBACK_S3_ENDPOINT: ${{ secrets.FALLBACK_S3_ENDPOINT }}
+      DEV_AGW_PUBLIC_KEY: ${{ secrets.DEV_AGW_PUBLIC_KEY }}
+      DEV_AGW_ENDPOINT: ${{ secrets.DEV_AGW_ENDPOINT }}
+      DEV_S3_ENDPOINT: ${{ secrets.DEV_S3_ENDPOINT }}
+      FREE_V2_ENDPOINT: ${{ secrets.FREE_V2_ENDPOINT }}
+      PREM_V1_ENDPOINT: ${{ secrets.PREM_V1_ENDPOINT }}
+
+    steps:
+    - name: 'Get sources'
+      uses: actions/checkout@v4
+      with:
+        submodules: 'true'
+
+    - name: 'Install desktop Qt'
+      uses: jurplel/install-qt-action@v4
+      with:
+        version: ${{ env.QT_VERSION }}
+        host: 'linux'
+        target: 'desktop'
+        arch: 'linux_gcc_64'
+        modules: ${{ env.QT_MODULES }}
+        dir: ${{ runner.temp }}
+        py7zrversion: '==0.22.*'
+        extra: '--base ${{ env.QT_MIRROR }}'
+
+    - name: 'Install Android Qt arm64-v8a'
+      uses: jurplel/install-qt-action@v4
+      with:
+        version: ${{ env.QT_VERSION }}
+        host: 'linux'
+        target: 'android'
+        arch: 'android_arm64_v8a'
+        modules: ${{ env.QT_MODULES }}
+        dir: ${{ runner.temp }}
+        py7zrversion: '==0.22.*'
+        extra: '--base ${{ env.QT_MIRROR }}'
+
+    - name: 'Setup Java'
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+
+    - name: 'Setup Android SDK'
+      uses: android-actions/setup-android@v4
+      with:
+        packages: "platforms;android-26 platforms;android-36 build-tools;36.0.0 ndk;${{ env.NDK_VERSION }}"
+
+    - name: 'Setup python'
+      uses: actions/setup-python@v6
+      with:
+        python-version: 3.14
+
+    - name: 'Install conan'
+      run: pip install "conan==2.28.0"
+
+    - name: 'Build Android 8 dependencies'
+      shell: bash
+      run: |
+        cmake -S . -B build_android8_prebuilts \
+          -G Ninja \
+          -DPREBUILTS_ONLY=1 \
+          -DCMAKE_SYSTEM_NAME=Android \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a \
+          "-DANDROID_PLATFORM=$ANDROID_PLATFORM" \
+          "-DCMAKE_ANDROID_NDK=$ANDROID_HOME/ndk/$NDK_VERSION"
+
+    - name: 'Build Android 8 APK'
+      env:
+        QT_INSTALL_DIR: ${{ runner.temp }}
+      shell: bash
+      run: |
+        deploy/build.sh -t android --abi arm64-v8a --build ./deploy/build/android8
+
+        VERSION=$(grep CMAKE_PROJECT_VERSION:STATIC deploy/build/android8/CMakeCache.txt | cut -d= -f2)
+        mv deploy/build/android8/client/android-build/AmneziaVPN.apk \
+           "AmneziaVPN_${VERSION}_android8_arm64-v8a.apk"
+
+    - name: 'Verify Android 8 APK'
+      shell: bash
+      run: |
+        APK=$(find . -maxdepth 1 -name 'AmneziaVPN_*_android8_arm64-v8a.apk' -print -quit)
+        test -n "$APK"
+        "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" manifest min-sdk "$APK" | grep -qx 26
+        "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" manifest target-sdk "$APK" | grep -qx 36
+        "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | grep -q "maxSdkVersion:'27'"
+
+    - name: 'Upload Android 8 arm64-v8a APK'
+      uses: actions/upload-artifact@v7
+      with:
+        path: AmneziaVPN_*_android8_arm64-v8a.apk
+        archive: false
+        retention-days: 7
+
+# ------------------------------------------------------
+
   Extra:
     runs-on: ubuntu-latest
     steps:
@@ -976,4 +1085,3 @@ jobs:
         run: | 
           echo "Pull request:" >> $GITHUB_STEP_SUMMARY
           echo "[[#${{ fromJSON(steps.pull_request.outputs.data)[0].number }}] ${{ fromJSON(steps.pull_request.outputs.data)[0].title }}](${{ fromJSON(steps.pull_request.outputs.data)[0].html_url }})" >> $GITHUB_STEP_SUMMARY
-
